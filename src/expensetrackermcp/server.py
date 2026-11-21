@@ -1,5 +1,6 @@
+from app import mcp
+import analytics_func
 from utility_func import *
-from fastmcp import FastMCP
 import sqlite3
 from pathlib import Path
 from importlib.resources import files
@@ -11,8 +12,6 @@ DB_PATH = PROJECT_ROOT / "expenses.db"
 CATEGORIES_FILE = files(
     "expensetrackermcp.resources"
 ).joinpath("categories.json")
-
-mcp = FastMCP("ExpenseTracker")
 
 
 def init_db():

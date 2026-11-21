@@ -1,6 +1,11 @@
 import json
 from datetime import datetime
+import sqlite3
 from importlib.resources import files
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DB_PATH = PROJECT_ROOT / "expenses.db"
 
 CATEGORIES_FILE = files(
     "expensetrackermcp.resources"
@@ -11,6 +16,35 @@ def validate_date(date_value):
         return datetime.strptime(date_value, "%Y-%m-%d")
     except ValueError:
         return None
+
+def validate_date_range(start_date=None, end_date=None):
+    start_date_obj = None
+    end_date_obj = None
+
+    if start_date:
+        start_date_obj = validate_date(start_date)
+        if start_date_obj is None:
+            return {
+                "status": "error",
+                "message": "Invalid start date. Expected YYYY-MM-DD."
+            }
+
+    if end_date:
+        end_date_obj = validate_date(end_date)
+        if end_date_obj is None:
+            return {
+                "status": "error",
+                "message": "Invalid end date. Expected YYYY-MM-DD."
+            }
+
+    if start_date_obj and end_date_obj:
+        if start_date_obj > end_date_obj:
+            return {
+                "status": "error",
+                "message": "Start date cannot be after end date."
+            }
+
+    return None
 
 def validate_category_filters(category, subcategory, categories):
 
@@ -161,6 +195,36 @@ def validate_update_fields(date, amount, category, subcategory, note):
 
     return updates, None
 
+def calculate_total(start_date, end_date):
+
+    with sqlite3.connect(DB_PATH) as c:
+        cur = c.execute(
+            """
+            SELECT COALESCE(SUM(amount), 0)
+            FROM expenses
+            WHERE date BETWEEN ? AND ?
+            """,
+            (start_date, end_date)
+        )
+
+        return cur.fetchone()[0]
+
 def load_categories():
     with open(CATEGORIES_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def calculate_category_totals(start_date, end_date):
+
+    with sqlite3.connect(DB_PATH) as c:
+        cur = c.execute(
+            """
+            SELECT category, SUM(amount) AS total_amount
+            FROM expenses
+            WHERE date BETWEEN ? AND ?
+            GROUP BY category
+            """,
+            (start_date, end_date)
+        )
+
+        return dict(cur.fetchall())
