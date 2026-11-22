@@ -1,7 +1,7 @@
-from app import mcp
-import analytics_func
-import budget_func
-from utility_func import *
+from expensetrackermcp.app import mcp
+import expensetrackermcp.analytics_func
+import expensetrackermcp.budget_func
+from expensetrackermcp.utility_func import *
 import sqlite3
 from pathlib import Path
 from importlib.resources import files
@@ -298,4 +298,4 @@ def categories():
     return CATEGORIES_FILE.read_text(encoding="utf-8")
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=8050)

@@ -1,5 +1,5 @@
-from app import mcp
-from utility_func import *
+from expensetrackermcp.app import mcp
+from expensetrackermcp.utility_func import *
 from datetime import datetime
 import math
 

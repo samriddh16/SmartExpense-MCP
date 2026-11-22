@@ -1,5 +1,5 @@
-from app import mcp
-from utility_func import *
+from expensetrackermcp.app import mcp
+from expensetrackermcp.utility_func import *
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = PROJECT_ROOT / "expenses.db"
