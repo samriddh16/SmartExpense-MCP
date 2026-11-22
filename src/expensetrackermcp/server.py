@@ -1,5 +1,6 @@
 from app import mcp
 import analytics_func
+import budget_func
 from utility_func import *
 import sqlite3
 from pathlib import Path

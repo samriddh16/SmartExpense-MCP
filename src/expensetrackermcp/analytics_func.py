@@ -1,5 +1,3 @@
-import sqlite3
-from pathlib import Path
 from app import mcp
 from utility_func import *
 
@@ -443,4 +441,58 @@ def get_category_spending_comparison(
             "end_date": period2_end
         },
         "category_comparison": category_comparison
+    }
+
+
+@mcp.tool()
+def detect_unusual_spending(
+    start_date: str = None,
+    end_date: str = None,
+    threshold_multiplier: float = 2.0
+):
+    """Detect unusually high expenses using category-wise standard deviation."""
+
+    date_error = validate_date_range(start_date, end_date)
+    if date_error:
+        return date_error
+
+    if threshold_multiplier <= 0:
+        return {
+            "status": "error",
+            "message": "Threshold multiplier must be greater than zero."
+        }
+
+    expenses = fetch_expenses_for_analysis(start_date, end_date)
+
+    if not expenses:
+        return {
+            "status": "success",
+            "message": "No expenses found for the given date range.",
+            "unusual_expenses": []
+        }
+
+    category_stats = calculate_category_statistics(
+        expenses,
+        threshold_multiplier
+    )
+
+    unusual_expenses = []
+
+    for expense in expenses:
+        stats = category_stats[expense["category"]]
+
+        if expense["amount"] > stats["threshold"]:
+            unusual_expenses.append({
+                **expense,
+                "category_average": stats["mean"],
+                "standard_deviation": stats["standard_deviation"],
+                "anomaly_threshold": stats["threshold"]
+            })
+
+    return {
+        "status": "success",
+        "threshold_multiplier": threshold_multiplier,
+        "total_expenses_analyzed": len(expenses),
+        "unusual_expense_count": len(unusual_expenses),
+        "unusual_expenses": unusual_expenses
     }

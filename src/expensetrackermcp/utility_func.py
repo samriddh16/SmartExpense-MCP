@@ -1,4 +1,6 @@
 import json
+import statistics
+from collections import defaultdict
 from datetime import datetime
 import sqlite3
 from importlib.resources import files
@@ -228,3 +230,54 @@ def calculate_category_totals(start_date, end_date):
         )
 
         return dict(cur.fetchall())
+
+def calculate_category_statistics(expenses, threshold_multiplier=2.0):
+    grouped_expenses = defaultdict(list)
+
+    for expense in expenses:
+        grouped_expenses[expense["category"]].append(expense["amount"])
+
+    category_stats = {}
+
+    for category, amounts in grouped_expenses.items():
+        mean = statistics.mean(amounts)
+        std_dev = statistics.pstdev(amounts)
+
+        threshold = mean + (threshold_multiplier * std_dev)
+
+        category_stats[category] = {
+            "mean": round(mean, 2),
+            "standard_deviation": round(std_dev, 2),
+            "threshold": round(threshold, 2)
+        }
+
+    return category_stats
+
+
+def fetch_expenses_for_analysis(start_date=None, end_date=None):
+    query = """
+        SELECT id, date, amount, category, subcategory, note
+        FROM expenses
+    """
+
+    conditions = []
+    params = []
+
+    if start_date:
+        conditions.append("date >= ?")
+        params.append(start_date)
+
+    if end_date:
+        conditions.append("date <= ?")
+        params.append(end_date)
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    query += " ORDER BY category, date"
+
+    with sqlite3.connect(DB_PATH) as c:
+        cur = c.execute(query, params)
+        columns = [description[0] for description in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
