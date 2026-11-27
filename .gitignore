@@ -27,3 +27,11 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log

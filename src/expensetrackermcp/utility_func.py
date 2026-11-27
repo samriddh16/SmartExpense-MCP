@@ -2,12 +2,9 @@ import json
 import statistics
 from collections import defaultdict
 from datetime import datetime
-import sqlite3
 from importlib.resources import files
-from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = PROJECT_ROOT / "expenses.db"
+from expensetrackermcp.database import engine
+from sqlalchemy import text
 
 CATEGORIES_FILE = files(
     "expensetrackermcp.resources"
@@ -199,17 +196,19 @@ def validate_update_fields(date, amount, category, subcategory, note):
 
 def calculate_total(start_date, end_date):
 
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(
-            """
-            SELECT COALESCE(SUM(amount), 0)
-            FROM expenses
-            WHERE date BETWEEN ? AND ?
-            """,
-            (start_date, end_date)
-        )
+    query = text("""
+        SELECT COALESCE(SUM(amount), 0)
+        FROM expenses
+        WHERE date BETWEEN :start_date AND :end_date
+    """)
 
-        return cur.fetchone()[0]
+    with engine.connect() as connection:
+        result = connection.execute(query, {
+            "start_date": start_date,
+            "end_date": end_date
+        })
+
+        return result.scalar_one()
 
 def load_categories():
     with open(CATEGORIES_FILE, "r", encoding="utf-8") as f:
@@ -218,18 +217,20 @@ def load_categories():
 
 def calculate_category_totals(start_date, end_date):
 
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(
-            """
-            SELECT category, SUM(amount) AS total_amount
-            FROM expenses
-            WHERE date BETWEEN ? AND ?
-            GROUP BY category
-            """,
-            (start_date, end_date)
-        )
+    query = text("""
+        SELECT category, SUM(amount) AS total_amount
+        FROM expenses
+        WHERE date BETWEEN :start_date AND :end_date
+        GROUP BY category
+    """)
 
-        return dict(cur.fetchall())
+    with engine.connect() as connection:
+        result = connection.execute(query, {
+            "start_date": start_date,
+            "end_date": end_date
+        })
+
+        return dict(result.fetchall())
 
 def calculate_category_statistics(expenses, threshold_multiplier=2.0):
     grouped_expenses = defaultdict(list)
@@ -255,29 +256,32 @@ def calculate_category_statistics(expenses, threshold_multiplier=2.0):
 
 
 def fetch_expenses_for_analysis(start_date=None, end_date=None):
+
     query = """
         SELECT id, date, amount, category, subcategory, note
         FROM expenses
     """
 
     conditions = []
-    params = []
+    params = {}
 
     if start_date:
-        conditions.append("date >= ?")
-        params.append(start_date)
+        conditions.append("date >= :start_date")
+        params["start_date"] = start_date
 
     if end_date:
-        conditions.append("date <= ?")
-        params.append(end_date)
+        conditions.append("date <= :end_date")
+        params["end_date"] = end_date
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
 
     query += " ORDER BY category, date"
 
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(query, params)
-        columns = [description[0] for description in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
+    with engine.connect() as connection:
+        result = connection.execute(text(query), params)
 
+        return [
+            dict(row)
+            for row in result.mappings().all()
+        ]

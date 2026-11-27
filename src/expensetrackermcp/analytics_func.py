@@ -1,8 +1,10 @@
+
 from expensetrackermcp.app import mcp
 from expensetrackermcp.utility_func import *
+from expensetrackermcp.database import engine
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = PROJECT_ROOT / "expenses.db"
+from sqlalchemy import text
+
 
 @mcp.tool()
 def get_total_expenses(start_date: str, end_date: str):
@@ -19,18 +21,19 @@ def get_total_expenses(start_date: str, end_date: str):
     if validation_error:
         return validation_error
 
-    # Calculate total
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(
-            """
-            SELECT COALESCE(SUM(amount), 0)
-            FROM expenses
-            WHERE date BETWEEN ? AND ?
-            """,
-            (start_date, end_date)
-        )
+    query = text("""
+        SELECT COALESCE(SUM(amount), 0)
+        FROM expenses
+        WHERE date BETWEEN :start_date AND :end_date
+    """)
 
-        total = cur.fetchone()[0]
+    with engine.connect() as connection:
+        result = connection.execute(query, {
+            "start_date": start_date,
+            "end_date": end_date
+        })
+
+        total = result.scalar_one()
 
     return {
         "status": "success",
@@ -52,36 +55,33 @@ def get_category_wise_expenses(
     if validation_error:
         return validation_error
 
-    # Build query dynamically
     query = """
         SELECT category, SUM(amount) AS total_amount
         FROM expenses
         WHERE 1=1
     """
 
-    params = []
+    params = {}
 
     if start_date:
-        query += " AND date >= ?"
-        params.append(start_date)
+        query += " AND date >= :start_date"
+        params["start_date"] = start_date
 
     if end_date:
-        query += " AND date <= ?"
-        params.append(end_date)
+        query += " AND date <= :end_date"
+        params["end_date"] = end_date
 
     query += """
         GROUP BY category
         ORDER BY total_amount DESC
     """
 
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(query, params)
-
-        columns = [description[0] for description in cur.description]
+    with engine.connect() as connection:
+        result = connection.execute(text(query), params)
 
         category_totals = [
-            dict(zip(columns, row))
-            for row in cur.fetchall()
+            dict(row)
+            for row in result.mappings().all()
         ]
 
     return {
@@ -105,7 +105,6 @@ def get_average_expense(
     if validation_error:
         return validation_error
 
-    # Build query dynamically
     query = """
         SELECT
             COUNT(*) AS expense_count,
@@ -115,20 +114,23 @@ def get_average_expense(
         WHERE 1=1
     """
 
-    params = []
+    params = {}
 
     if start_date:
-        query += " AND date >= ?"
-        params.append(start_date)
+        query += " AND date >= :start_date"
+        params["start_date"] = start_date
 
     if end_date:
-        query += " AND date <= ?"
-        params.append(end_date)
+        query += " AND date <= :end_date"
+        params["end_date"] = end_date
 
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(query, params)
+    with engine.connect() as connection:
+        result = connection.execute(text(query), params)
+        row = result.mappings().one()
 
-        expense_count, total_amount, average_amount = cur.fetchone()
+        expense_count = row["expense_count"]
+        total_amount = row["total_amount"]
+        average_amount = row["average_amount"]
 
     return {
         "status": "success",
@@ -149,13 +151,11 @@ def get_highest_lowest_expenses(
 ):
     """Find the highest and lowest individual expenses using optional filters."""
 
-    # Validate dates
     validation_error = validate_date_range(start_date, end_date)
 
     if validation_error:
         return validation_error
 
-    # Validate category and subcategory
     categories = load_categories()
 
     category_error = validate_category_filters(
@@ -165,50 +165,44 @@ def get_highest_lowest_expenses(
     if category_error:
         return category_error
 
-    # Build the SQL query dynamically
     query = """
         SELECT id, date, amount, category, subcategory, note
         FROM expenses
         WHERE 1=1
     """
 
-    params = []
+    params = {}
 
     if start_date:
-        query += " AND date >= ?"
-        params.append(start_date)
+        query += " AND date >= :start_date"
+        params["start_date"] = start_date
 
     if end_date:
-        query += " AND date <= ?"
-        params.append(end_date)
+        query += " AND date <= :end_date"
+        params["end_date"] = end_date
 
     if category:
-        query += " AND category = ?"
-        params.append(category)
+        query += " AND category = :category"
+        params["category"] = category
 
     if subcategory:
-        query += " AND subcategory = ?"
-        params.append(subcategory)
+        query += " AND subcategory = :subcategory"
+        params["subcategory"] = subcategory
 
-    # Find highest and lowest expenses
-    with sqlite3.connect(DB_PATH) as c:
-
-        highest_cur = c.execute(
-            query + " ORDER BY amount DESC, id ASC LIMIT 1",
+    with engine.connect() as connection:
+        highest_result = connection.execute(
+            text(query + " ORDER BY amount DESC, id ASC LIMIT 1"),
             params
         )
-        highest = highest_cur.fetchone()
 
-        lowest_cur = c.execute(
-            query + " ORDER BY amount ASC, id ASC LIMIT 1",
+        highest = highest_result.mappings().first()
+
+        lowest_result = connection.execute(
+            text(query + " ORDER BY amount ASC, id ASC LIMIT 1"),
             params
         )
-        lowest = lowest_cur.fetchone()
 
-        columns = [
-            description[0]
-            for description in highest_cur.description
-        ]
+        lowest = lowest_result.mappings().first()
 
     if highest is None:
         return {
@@ -224,10 +218,9 @@ def get_highest_lowest_expenses(
         "end_date": end_date,
         "category": category,
         "subcategory": subcategory,
-        "highest_expense": dict(zip(columns, highest)),
-        "lowest_expense": dict(zip(columns, lowest))
+        "highest_expense": dict(highest),
+        "lowest_expense": dict(lowest)
     }
-
 
 
 @mcp.tool()
@@ -244,39 +237,34 @@ def get_monthly_spending_trends(
 
     query = """
         SELECT
-            strftime('%Y-%m', date) AS month,
+            TO_CHAR(date, 'YYYY-MM') AS month,
             SUM(amount) AS total_amount,
             COUNT(*) AS expense_count
         FROM expenses
         WHERE 1=1
     """
 
-    params = []
+    params = {}
 
     if start_date:
-        query += " AND date >= ?"
-        params.append(start_date)
+        query += " AND date >= :start_date"
+        params["start_date"] = start_date
 
     if end_date:
-        query += " AND date <= ?"
-        params.append(end_date)
+        query += " AND date <= :end_date"
+        params["end_date"] = end_date
 
     query += """
-        GROUP BY strftime('%Y-%m', date)
+        GROUP BY TO_CHAR(date, 'YYYY-MM')
         ORDER BY month
     """
 
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(query, params)
-
-        columns = [
-            description[0]
-            for description in cur.description
-        ]
+    with engine.connect() as connection:
+        result = connection.execute(text(query), params)
 
         monthly_trends = [
-            dict(zip(columns, row))
-            for row in cur.fetchall()
+            dict(row)
+            for row in result.mappings().all()
         ]
 
     return {
@@ -287,6 +275,7 @@ def get_monthly_spending_trends(
         "monthly_trends": monthly_trends
     }
 
+
 @mcp.tool()
 def get_spending_comparison(
     period1_start: str,
@@ -296,7 +285,6 @@ def get_spending_comparison(
 ):
     """Compare total expenses across two date ranges."""
 
-    # Validate first period
     period1_error = validate_date_range(
         period1_start, period1_end
     )
@@ -304,7 +292,6 @@ def get_spending_comparison(
     if period1_error:
         return period1_error
 
-    # Validate second period
     period2_error = validate_date_range(
         period2_start, period2_end
     )
@@ -312,7 +299,6 @@ def get_spending_comparison(
     if period2_error:
         return period2_error
 
-    # Calculate spending for both periods
     period1_total = calculate_total(
         period1_start, period1_end
     )
@@ -321,10 +307,8 @@ def get_spending_comparison(
         period2_start, period2_end
     )
 
-    # Calculate absolute difference
     difference = period2_total - period1_total
 
-    # Determine spending status
     if difference > 0:
         status = "increased"
     elif difference < 0:
@@ -332,7 +316,6 @@ def get_spending_comparison(
     else:
         status = "unchanged"
 
-    # Calculate percentage change
     if period1_total == 0:
         percentage_change = None
     else:
@@ -367,7 +350,6 @@ def get_category_spending_comparison(
 ):
     """Compare category-wise expenses across two date ranges."""
 
-    # Validate first period
     period1_error = validate_date_range(
         period1_start, period1_end
     )
@@ -375,7 +357,6 @@ def get_category_spending_comparison(
     if period1_error:
         return period1_error
 
-    # Validate second period
     period2_error = validate_date_range(
         period2_start, period2_end
     )
@@ -383,7 +364,6 @@ def get_category_spending_comparison(
     if period2_error:
         return period2_error
 
-    # Calculate category-wise totals for both periods
     period1_totals = calculate_category_totals(
         period1_start, period1_end
     )
@@ -392,12 +372,10 @@ def get_category_spending_comparison(
         period2_start, period2_end
     )
 
-    # Get all categories from both periods
     all_categories = set(period1_totals) | set(period2_totals)
 
     category_comparison = []
 
-    # Compare each category
     for category in sorted(all_categories):
 
         period1_amount = period1_totals.get(category, 0)
@@ -405,7 +383,6 @@ def get_category_spending_comparison(
 
         difference = period2_amount - period1_amount
 
-        # Determine spending trend
         if difference > 0:
             trend = "increased"
         elif difference < 0:
@@ -413,7 +390,6 @@ def get_category_spending_comparison(
         else:
             trend = "unchanged"
 
-        # Calculate percentage change
         if period1_amount == 0:
             percentage_change = None
         else:
@@ -453,6 +429,7 @@ def detect_unusual_spending(
     """Detect unusually high expenses using category-wise standard deviation."""
 
     date_error = validate_date_range(start_date, end_date)
+
     if date_error:
         return date_error
 

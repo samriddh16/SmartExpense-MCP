@@ -1,26 +1,12 @@
+
 from expensetrackermcp.app import mcp
-from expensetrackermcp.utility_func import *
+from expensetrackermcp.utility_func import load_categories
+from expensetrackermcp.database import engine
+
+from sqlalchemy import text
 from datetime import datetime
 import math
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = PROJECT_ROOT / "expenses.db"
-
-
-def create_budget_table():
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS budgets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category TEXT NOT NULL,
-                month TEXT NOT NULL,
-                amount REAL NOT NULL CHECK(amount > 0),
-                UNIQUE(category, month)
-            )
-        """)
-
-
-create_budget_table()
 
 @mcp.tool()
 def set_category_budget(category: str, month: str, amount: float):
@@ -31,7 +17,7 @@ def set_category_budget(category: str, month: str, amount: float):
     if category not in categories:
         return {
             "status": "error",
-            "message": f"Invalid category: {category}"
+            "message": f"Invalid category: **{category}**"
         }
 
     try:
@@ -48,17 +34,23 @@ def set_category_budget(category: str, month: str, amount: float):
             "message": "Budget amount must be a finite number greater than zero."
         }
 
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute("""
-            INSERT INTO budgets (category, month, amount)
-            VALUES (?, ?, ?)
-            ON CONFLICT(category, month)
-            DO UPDATE SET amount = excluded.amount
-        """, (category, month, amount))
+    query = text("""
+        INSERT INTO budgets (category, month, amount)
+        VALUES (:category, :month, :amount)
+        ON CONFLICT (category, month)
+        DO UPDATE SET amount = EXCLUDED.amount
+    """)
+
+    with engine.begin() as connection:
+        connection.execute(query, {
+            "category": category,
+            "month": month,
+            "amount": amount
+        })
 
     return {
         "status": "success",
-        "message": f"Budget set successfully for {category} in {month}.",
+        "message": f"Budget set successfully for **{category}** in **{month}**.",
         "category": category,
         "month": month,
         "budget_amount": amount
@@ -74,51 +66,54 @@ def get_remaining_budget(category: str, month: str):
     if category not in categories:
         return {
             "status": "error",
-            "message": f"Invalid category: {category}"
-        }
-
-    if not isinstance(month, str) or len(month) != 7 or month[4] != "-":
-        return {
-            "status": "error",
-            "message": "Invalid month. Expected YYYY-MM."
+            "message": f"Invalid category: **{category}**"
         }
 
     try:
         datetime.strptime(month, "%Y-%m")
-    except ValueError:
+    except (ValueError, TypeError):
         return {
             "status": "error",
             "message": "Invalid month. Expected YYYY-MM."
         }
 
-    with sqlite3.connect(DB_PATH) as c:
-        budget = c.execute("""
-            SELECT amount
-            FROM budgets
-            WHERE category = ? AND month = ?
-        """, (category, month)).fetchone()
+    budget_query = text("""
+        SELECT amount
+        FROM budgets
+        WHERE category = :category AND month = :month
+    """)
+
+    spending_query = text("""
+        SELECT COALESCE(SUM(amount), 0)
+        FROM expenses
+        WHERE category = :category
+        AND TO_CHAR(date, 'YYYY-MM') = :month
+    """)
+
+    with engine.connect() as connection:
+        budget = connection.execute(
+            budget_query,
+            {"category": category, "month": month}
+        ).scalar_one_or_none()
 
         if budget is None:
             return {
                 "status": "error",
-                "message": f"No budget found for {category} in {month}."
+                "message": f"No budget found for **{category}** in **{month}**."
             }
 
-        spent = c.execute("""
-            SELECT COALESCE(SUM(amount), 0)
-            FROM expenses
-            WHERE category = ?
-            AND strftime('%Y-%m', date) = ?
-        """, (category, month)).fetchone()[0]
+        spent = connection.execute(
+            spending_query,
+            {"category": category, "month": month}
+        ).scalar_one()
 
-    budget_amount = budget[0]
-    remaining = budget_amount - spent
+    remaining = budget - spent
 
     return {
         "status": "success",
         "category": category,
         "month": month,
-        "budget_amount": budget_amount,
+        "budget_amount": budget,
         "spent_amount": round(spent, 2),
         "remaining_amount": round(remaining, 2),
         "is_over_budget": remaining < 0
@@ -129,41 +124,37 @@ def get_remaining_budget(category: str, month: str):
 def get_budget_usage(month: str):
     """Get monthly budget usage across all budgeted categories."""
 
-    if not isinstance(month, str) or len(month) != 7 or month[4] != "-":
-        return {
-            "status": "error",
-            "message": "Invalid month. Expected YYYY-MM."
-        }
-
     try:
         datetime.strptime(month, "%Y-%m")
-    except ValueError:
+    except (ValueError, TypeError):
         return {
             "status": "error",
             "message": "Invalid month. Expected YYYY-MM."
         }
 
-    with sqlite3.connect(DB_PATH) as c:
-        c.row_factory = sqlite3.Row
+    query = text("""
+        SELECT
+            b.category,
+            b.amount AS budget_amount,
+            COALESCE(SUM(e.amount), 0) AS spent_amount
+        FROM budgets b
+        LEFT JOIN expenses e
+            ON b.category = e.category
+            AND TO_CHAR(e.date, 'YYYY-MM') = b.month
+        WHERE b.month = :month
+        GROUP BY b.category, b.amount
+        ORDER BY b.category
+    """)
 
-        records = c.execute("""
-            SELECT
-                b.category,
-                b.amount AS budget_amount,
-                COALESCE(SUM(e.amount), 0) AS spent_amount
-            FROM budgets b
-            LEFT JOIN expenses e
-                ON b.category = e.category
-                AND strftime('%Y-%m', e.date) = b.month
-            WHERE b.month = ?
-            GROUP BY b.category, b.amount
-            ORDER BY b.category
-        """, (month,)).fetchall()
+    with engine.connect() as connection:
+        records = connection.execute(
+            query, {"month": month}
+        ).mappings().all()
 
     if not records:
         return {
             "status": "success",
-            "message": f"No budgets found for {month}.",
+            "message": f"No budgets found for **{month}**.",
             "budget_usage": []
         }
 
@@ -196,41 +187,42 @@ def get_budget_usage(month: str):
 def check_budget_overruns(month: str):
     """Identify categories that have exceeded their monthly budgets."""
 
-    if not isinstance(month, str) or len(month) != 7 or month[4] != "-":
-        return {
-            "status": "error",
-            "message": "Invalid month. Expected YYYY-MM."
-        }
-
     try:
         datetime.strptime(month, "%Y-%m")
-    except ValueError:
+    except (ValueError, TypeError):
         return {
             "status": "error",
             "message": "Invalid month. Expected YYYY-MM."
         }
 
-    with sqlite3.connect(DB_PATH) as c:
-        records = c.execute("""
-            SELECT
-                b.category,
-                b.amount AS budget_amount,
-                COALESCE(SUM(e.amount), 0) AS spent_amount
-            FROM budgets b
-            LEFT JOIN expenses e
-                ON b.category = e.category
-                AND strftime('%Y-%m', e.date) = b.month
-            WHERE b.month = ?
-            GROUP BY b.category, b.amount
-            HAVING SUM(COALESCE(e.amount, 0)) > b.amount
-            ORDER BY (SUM(COALESCE(e.amount, 0)) - b.amount) DESC
-        """, (month,)).fetchall()
+    query = text("""
+        SELECT
+            b.category,
+            b.amount AS budget_amount,
+            COALESCE(SUM(e.amount), 0) AS spent_amount
+        FROM budgets b
+        LEFT JOIN expenses e
+            ON b.category = e.category
+            AND TO_CHAR(e.date, 'YYYY-MM') = b.month
+        WHERE b.month = :month
+        GROUP BY b.category, b.amount
+        HAVING COALESCE(SUM(e.amount), 0) > b.amount
+        ORDER BY (COALESCE(SUM(e.amount), 0) - b.amount) DESC
+    """)
+
+    with engine.connect() as connection:
+        records = connection.execute(
+            query, {"month": month}
+        ).mappings().all()
 
     overruns = []
 
-    for category, budget_amount, spent_amount in records:
+    for record in records:
+        budget_amount = record["budget_amount"]
+        spent_amount = record["spent_amount"]
+
         overruns.append({
-            "category": category,
+            "category": record["category"],
             "budget_amount": budget_amount,
             "spent_amount": round(spent_amount, 2),
             "overrun_amount": round(spent_amount - budget_amount, 2),
