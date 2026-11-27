@@ -1,4 +1,5 @@
 
+from datetime import date
 from expensetrackermcp.app import mcp
 from expensetrackermcp.utility_func import *
 from expensetrackermcp.database import engine
@@ -7,7 +8,7 @@ from sqlalchemy import text
 
 
 @mcp.tool()
-def get_total_expenses(start_date: str, end_date: str):
+async def get_total_expenses(start_date: str, end_date: str):
     """Calculate total expenses within a date range."""
 
     if not start_date or not end_date:
@@ -21,14 +22,18 @@ def get_total_expenses(start_date: str, end_date: str):
     if validation_error:
         return validation_error
 
+    # Convert strings into Python date objects for PostgreSQL DATE parameters.
+    start_date = date.fromisoformat(start_date)
+    end_date = date.fromisoformat(end_date)
+
     query = text("""
         SELECT COALESCE(SUM(amount), 0)
         FROM expenses
         WHERE date BETWEEN :start_date AND :end_date
     """)
 
-    with engine.connect() as connection:
-        result = connection.execute(query, {
+    async with engine.connect() as connection:
+        result = await connection.execute(query, {
             "start_date": start_date,
             "end_date": end_date
         })
@@ -37,14 +42,14 @@ def get_total_expenses(start_date: str, end_date: str):
 
     return {
         "status": "success",
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "total_expenses": total
     }
 
 
 @mcp.tool()
-def get_category_wise_expenses(
+async def get_category_wise_expenses(
     start_date: str = None,
     end_date: str = None
 ):
@@ -54,6 +59,12 @@ def get_category_wise_expenses(
 
     if validation_error:
         return validation_error
+
+    if start_date:
+        start_date = date.fromisoformat(start_date)
+
+    if end_date:
+        end_date = date.fromisoformat(end_date)
 
     query = """
         SELECT category, SUM(amount) AS total_amount
@@ -76,8 +87,8 @@ def get_category_wise_expenses(
         ORDER BY total_amount DESC
     """
 
-    with engine.connect() as connection:
-        result = connection.execute(text(query), params)
+    async with engine.connect() as connection:
+        result = await connection.execute(text(query), params)
 
         category_totals = [
             dict(row)
@@ -87,14 +98,14 @@ def get_category_wise_expenses(
     return {
         "status": "success",
         "count": len(category_totals),
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
         "category_breakdown": category_totals
     }
 
 
 @mcp.tool()
-def get_average_expense(
+async def get_average_expense(
     start_date: str = None,
     end_date: str = None
 ):
@@ -104,6 +115,12 @@ def get_average_expense(
 
     if validation_error:
         return validation_error
+
+    if start_date:
+        start_date = date.fromisoformat(start_date)
+
+    if end_date:
+        end_date = date.fromisoformat(end_date)
 
     query = """
         SELECT
@@ -124,8 +141,8 @@ def get_average_expense(
         query += " AND date <= :end_date"
         params["end_date"] = end_date
 
-    with engine.connect() as connection:
-        result = connection.execute(text(query), params)
+    async with engine.connect() as connection:
+        result = await connection.execute(text(query), params)
         row = result.mappings().one()
 
         expense_count = row["expense_count"]
@@ -134,8 +151,8 @@ def get_average_expense(
 
     return {
         "status": "success",
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
         "expense_count": expense_count,
         "total_amount": total_amount,
         "average_expense": round(average_amount, 2)
@@ -143,7 +160,7 @@ def get_average_expense(
 
 
 @mcp.tool()
-def get_highest_lowest_expenses(
+async def get_highest_lowest_expenses(
     start_date: str = None,
     end_date: str = None,
     category: str = None,
@@ -164,6 +181,12 @@ def get_highest_lowest_expenses(
 
     if category_error:
         return category_error
+
+    if start_date:
+        start_date = date.fromisoformat(start_date)
+
+    if end_date:
+        end_date = date.fromisoformat(end_date)
 
     query = """
         SELECT id, date, amount, category, subcategory, note
@@ -189,15 +212,15 @@ def get_highest_lowest_expenses(
         query += " AND subcategory = :subcategory"
         params["subcategory"] = subcategory
 
-    with engine.connect() as connection:
-        highest_result = connection.execute(
+    async with engine.connect() as connection:
+        highest_result = await connection.execute(
             text(query + " ORDER BY amount DESC, id ASC LIMIT 1"),
             params
         )
 
         highest = highest_result.mappings().first()
 
-        lowest_result = connection.execute(
+        lowest_result = await connection.execute(
             text(query + " ORDER BY amount ASC, id ASC LIMIT 1"),
             params
         )
@@ -214,8 +237,8 @@ def get_highest_lowest_expenses(
 
     return {
         "status": "success",
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
         "category": category,
         "subcategory": subcategory,
         "highest_expense": dict(highest),
@@ -224,7 +247,7 @@ def get_highest_lowest_expenses(
 
 
 @mcp.tool()
-def get_monthly_spending_trends(
+async def get_monthly_spending_trends(
     start_date: str = None,
     end_date: str = None
 ):
@@ -234,6 +257,12 @@ def get_monthly_spending_trends(
 
     if validation_error:
         return validation_error
+
+    if start_date:
+        start_date = date.fromisoformat(start_date)
+
+    if end_date:
+        end_date = date.fromisoformat(end_date)
 
     query = """
         SELECT
@@ -259,8 +288,8 @@ def get_monthly_spending_trends(
         ORDER BY month
     """
 
-    with engine.connect() as connection:
-        result = connection.execute(text(query), params)
+    async with engine.connect() as connection:
+        result = await connection.execute(text(query), params)
 
         monthly_trends = [
             dict(row)
@@ -269,15 +298,15 @@ def get_monthly_spending_trends(
 
     return {
         "status": "success",
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
         "count": len(monthly_trends),
         "monthly_trends": monthly_trends
     }
 
 
 @mcp.tool()
-def get_spending_comparison(
+async def get_spending_comparison(
     period1_start: str,
     period1_end: str,
     period2_start: str,
@@ -299,11 +328,12 @@ def get_spending_comparison(
     if period2_error:
         return period2_error
 
-    period1_total = calculate_total(
+    # These utility functions are async, so we must await them.
+    period1_total = await calculate_total(
         period1_start, period1_end
     )
 
-    period2_total = calculate_total(
+    period2_total = await calculate_total(
         period2_start, period2_end
     )
 
@@ -342,7 +372,7 @@ def get_spending_comparison(
 
 
 @mcp.tool()
-def get_category_spending_comparison(
+async def get_category_spending_comparison(
     period1_start: str,
     period1_end: str,
     period2_start: str,
@@ -364,11 +394,12 @@ def get_category_spending_comparison(
     if period2_error:
         return period2_error
 
-    period1_totals = calculate_category_totals(
+    # These utility functions are async, so we must await them.
+    period1_totals = await calculate_category_totals(
         period1_start, period1_end
     )
 
-    period2_totals = calculate_category_totals(
+    period2_totals = await calculate_category_totals(
         period2_start, period2_end
     )
 
@@ -421,7 +452,7 @@ def get_category_spending_comparison(
 
 
 @mcp.tool()
-def detect_unusual_spending(
+async def detect_unusual_spending(
     start_date: str = None,
     end_date: str = None,
     threshold_multiplier: float = 2.0
@@ -439,7 +470,8 @@ def detect_unusual_spending(
             "message": "Threshold multiplier must be greater than zero."
         }
 
-    expenses = fetch_expenses_for_analysis(start_date, end_date)
+    # This utility function is async, so we must await it.
+    expenses = await fetch_expenses_for_analysis(start_date, end_date)
 
     if not expenses:
         return {
@@ -448,22 +480,24 @@ def detect_unusual_spending(
             "unusual_expenses": []
         }
 
-    category_stats = calculate_category_statistics(
-        expenses,
-        threshold_multiplier
-    )
+    category_stats = calculate_category_statistics(expenses)
 
     unusual_expenses = []
 
     for expense in expenses:
         stats = category_stats[expense["category"]]
 
-        if expense["amount"] > stats["threshold"]:
+        threshold = (
+            stats["average"] +
+            threshold_multiplier * stats["std_dev"]
+        )
+
+        if expense["amount"] > threshold:
             unusual_expenses.append({
                 **expense,
-                "category_average": stats["mean"],
-                "standard_deviation": stats["standard_deviation"],
-                "anomaly_threshold": stats["threshold"]
+                "category_average": stats["average"],
+                "standard_deviation": stats["std_dev"],
+                "anomaly_threshold": threshold
             })
 
     return {

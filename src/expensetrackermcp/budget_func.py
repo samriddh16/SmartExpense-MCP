@@ -9,7 +9,7 @@ import math
 
 
 @mcp.tool()
-def set_category_budget(category: str, month: str, amount: float):
+async def set_category_budget(category: str, month: str, amount: float):
     """Set or update a monthly budget for a category."""
 
     categories = load_categories()
@@ -41,8 +41,8 @@ def set_category_budget(category: str, month: str, amount: float):
         DO UPDATE SET amount = EXCLUDED.amount
     """)
 
-    with engine.begin() as connection:
-        connection.execute(query, {
+    async with engine.begin() as connection:
+        await connection.execute(query, {
             "category": category,
             "month": month,
             "amount": amount
@@ -58,7 +58,7 @@ def set_category_budget(category: str, month: str, amount: float):
 
 
 @mcp.tool()
-def get_remaining_budget(category: str, month: str):
+async def get_remaining_budget(category: str, month: str):
     """Get the remaining monthly budget for a category."""
 
     categories = load_categories()
@@ -90,11 +90,13 @@ def get_remaining_budget(category: str, month: str):
         AND TO_CHAR(date, 'YYYY-MM') = :month
     """)
 
-    with engine.connect() as connection:
-        budget = connection.execute(
+    async with engine.connect() as connection:
+        budget = await connection.execute(
             budget_query,
             {"category": category, "month": month}
-        ).scalar_one_or_none()
+        )
+
+        budget = budget.scalar_one_or_none()
 
         if budget is None:
             return {
@@ -102,10 +104,12 @@ def get_remaining_budget(category: str, month: str):
                 "message": f"No budget found for **{category}** in **{month}**."
             }
 
-        spent = connection.execute(
+        spent = await connection.execute(
             spending_query,
             {"category": category, "month": month}
-        ).scalar_one()
+        )
+
+        spent = spent.scalar_one()
 
     remaining = budget - spent
 
@@ -121,7 +125,7 @@ def get_remaining_budget(category: str, month: str):
 
 
 @mcp.tool()
-def get_budget_usage(month: str):
+async def get_budget_usage(month: str):
     """Get monthly budget usage across all budgeted categories."""
 
     try:
@@ -146,10 +150,11 @@ def get_budget_usage(month: str):
         ORDER BY b.category
     """)
 
-    with engine.connect() as connection:
-        records = connection.execute(
+    async with engine.connect() as connection:
+        result = await connection.execute(
             query, {"month": month}
-        ).mappings().all()
+        )
+        records = result.mappings().all()
 
     if not records:
         return {
@@ -184,7 +189,7 @@ def get_budget_usage(month: str):
 
 
 @mcp.tool()
-def check_budget_overruns(month: str):
+async def check_budget_overruns(month: str):
     """Identify categories that have exceeded their monthly budgets."""
 
     try:
@@ -210,10 +215,11 @@ def check_budget_overruns(month: str):
         ORDER BY (COALESCE(SUM(e.amount), 0) - b.amount) DESC
     """)
 
-    with engine.connect() as connection:
-        records = connection.execute(
+    async with engine.connect() as connection:
+        result = await connection.execute(
             query, {"month": month}
-        ).mappings().all()
+        )
+        records = result.mappings().all()
 
     overruns = []
 

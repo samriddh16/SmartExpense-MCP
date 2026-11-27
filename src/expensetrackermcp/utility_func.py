@@ -1,10 +1,11 @@
 import json
-import statistics
+from datetime import date
+from statistics import mean, pstdev
 from collections import defaultdict
 from datetime import datetime
 from importlib.resources import files
-from expensetrackermcp.database import engine
 from sqlalchemy import text
+from expensetrackermcp.database import engine
 
 CATEGORIES_FILE = files(
     "expensetrackermcp.resources"
@@ -194,7 +195,10 @@ def validate_update_fields(date, amount, category, subcategory, note):
 
     return updates, None
 
-def calculate_total(start_date, end_date):
+
+async def calculate_total(start_date, end_date):
+    start_date = date.fromisoformat(start_date)
+    end_date = date.fromisoformat(end_date)
 
     query = text("""
         SELECT COALESCE(SUM(amount), 0)
@@ -202,20 +206,18 @@ def calculate_total(start_date, end_date):
         WHERE date BETWEEN :start_date AND :end_date
     """)
 
-    with engine.connect() as connection:
-        result = connection.execute(query, {
+    async with engine.connect() as connection:
+        result = await connection.execute(query, {
             "start_date": start_date,
             "end_date": end_date
         })
 
         return result.scalar_one()
 
-def load_categories():
-    with open(CATEGORIES_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
 
-
-def calculate_category_totals(start_date, end_date):
+async def calculate_category_totals(start_date, end_date):
+    start_date = date.fromisoformat(start_date)
+    end_date = date.fromisoformat(end_date)
 
     query = text("""
         SELECT category, SUM(amount) AS total_amount
@@ -224,39 +226,16 @@ def calculate_category_totals(start_date, end_date):
         GROUP BY category
     """)
 
-    with engine.connect() as connection:
-        result = connection.execute(query, {
+    async with engine.connect() as connection:
+        result = await connection.execute(query, {
             "start_date": start_date,
             "end_date": end_date
         })
 
         return dict(result.fetchall())
 
-def calculate_category_statistics(expenses, threshold_multiplier=2.0):
-    grouped_expenses = defaultdict(list)
 
-    for expense in expenses:
-        grouped_expenses[expense["category"]].append(expense["amount"])
-
-    category_stats = {}
-
-    for category, amounts in grouped_expenses.items():
-        mean = statistics.mean(amounts)
-        std_dev = statistics.pstdev(amounts)
-
-        threshold = mean + (threshold_multiplier * std_dev)
-
-        category_stats[category] = {
-            "mean": round(mean, 2),
-            "standard_deviation": round(std_dev, 2),
-            "threshold": round(threshold, 2)
-        }
-
-    return category_stats
-
-
-def fetch_expenses_for_analysis(start_date=None, end_date=None):
-
+async def fetch_expenses_for_analysis(start_date=None, end_date=None):
     query = """
         SELECT id, date, amount, category, subcategory, note
         FROM expenses
@@ -266,10 +245,12 @@ def fetch_expenses_for_analysis(start_date=None, end_date=None):
     params = {}
 
     if start_date:
+        start_date = date.fromisoformat(start_date)
         conditions.append("date >= :start_date")
         params["start_date"] = start_date
 
     if end_date:
+        end_date = date.fromisoformat(end_date)
         conditions.append("date <= :end_date")
         params["end_date"] = end_date
 
@@ -278,10 +259,61 @@ def fetch_expenses_for_analysis(start_date=None, end_date=None):
 
     query += " ORDER BY category, date"
 
-    with engine.connect() as connection:
-        result = connection.execute(text(query), params)
+    async with engine.connect() as connection:
+        result = await connection.execute(text(query), params)
 
         return [
             dict(row)
             for row in result.mappings().all()
         ]
+
+
+def calculate_category_statistics(expenses):
+    category_expenses = defaultdict(list)
+
+    for expense in expenses:
+        category_expenses[expense["category"]].append(
+            expense["amount"]
+        )
+
+    statistics = {}
+
+    for category, amounts in category_expenses.items():
+        avg = mean(amounts)
+        std_dev = pstdev(amounts) if len(amounts) > 1 else 0
+
+        statistics[category] = {
+            "average": avg,
+            "std_dev": std_dev,
+            "count": len(amounts)
+        }
+
+    return statistics
+
+
+def detect_unusual_expenses(expenses, multiplier=2):
+    category_stats = calculate_category_statistics(expenses)
+
+    unusual_expenses = []
+
+    for expense in expenses:
+        category = expense["category"]
+        stats = category_stats[category]
+
+        threshold = (
+            stats["average"] +
+            multiplier * stats["std_dev"]
+        )
+
+        if expense["amount"] > threshold:
+            unusual_expenses.append({
+                **expense,
+                "threshold": threshold
+            })
+
+    return unusual_expenses
+
+
+def load_categories():
+    with open(CATEGORIES_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
